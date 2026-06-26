@@ -65,7 +65,7 @@ namespace MobileGL {
         Float minLod = -1000.0f;
         Float maxLod = 1000.0f;
         Float lodBias = 0.0f;
-        SamplerCompareFunc compareFunc = SamplerCompareFunc::Always;
+        SamplerCompareFunc compareFunc = SamplerCompareFunc::LessEqual;
         SamplerCompareMode compareMode = SamplerCompareMode::None;
     };
 

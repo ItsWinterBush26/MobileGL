@@ -946,6 +946,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 backendObj = MakeShared<SamplerImpl::BackendSamplerObject>();
                             }
                             backendObj->SyncToBackend(samplerObject);
+                            backendObj->Bind(unit);
                         } else {
                             SamplerImpl::UnbindSampler(unit);
                         }

@@ -82,6 +82,74 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";");
     }
 
+    String PatchPhotonShadowCompareBlockerSearch(String source, GLenum shaderType) {
+        if (shaderType != GL_FRAGMENT_SHADER || source.find("shadowtex0") == String::npos ||
+            source.find("shadowtex1") == String::npos || source.find("blocker_search") == String::npos ||
+            source.find("shadow_pcf") == String::npos) {
+            return source;
+        }
+
+        const String from =
+            "        highp float depth = texelFetch(shadowtex0, ivec2(uv_1 * 2048.0), 0).x;\n"
+            "        highp float weight = step(depth, ref_z);\n";
+        const String to =
+            "        highp float depth_lo = 0.0;\n"
+            "        highp float depth_hi = 1.0;\n"
+            "        for (int depth_search_i = 0; depth_search_i < 12; ++depth_search_i)\n"
+            "        {\n"
+            "            highp float depth_mid = (depth_lo + depth_hi) * 0.5;\n"
+            "            highp float depth_cmp = texture(shadowtex1, vec3(uv_1, depth_mid));\n"
+            "            if (depth_cmp > 0.5)\n"
+            "            {\n"
+            "                depth_lo = depth_mid;\n"
+            "            }\n"
+            "            else\n"
+            "            {\n"
+            "                depth_hi = depth_mid;\n"
+            "            }\n"
+            "        }\n"
+            "        highp float depth = depth_lo;\n"
+            "        highp float weight = step(depth, ref_z);\n";
+
+        SizeT pos = source.find(from);
+        while (pos != String::npos) {
+            source.replace(pos, from.size(), to);
+            pos = source.find(from, pos + to.size());
+        }
+        return source;
+    }
+
+    String PatchPhotonShadowNoBlockerFallback(String source, GLenum shaderType) {
+        if (shaderType != GL_FRAGMENT_SHADER || source.find("shadowtex0") == String::npos ||
+            source.find("shadowtex1") == String::npos || source.find("calculate_shadows") == String::npos ||
+            source.find("shadow_pcf") == String::npos) {
+            return source;
+        }
+
+        const String from =
+            "    if (blocker_search_result.x < 9.9999999747524270787835121154785e-07)\n"
+            "    {\n"
+            "        return vec3((1.0 - distance_fade) + (distance_fade * distant_shadow));\n"
+            "    }\n";
+        const String to =
+            "    if (blocker_search_result.x < 9.9999999747524270787835121154785e-07)\n"
+            "    {\n"
+            "        highp vec3 param_nb_0 = shadow_screen_pos;\n"
+            "        highp vec3 param_nb_1 = shadow_clip_pos;\n"
+            "        highp float param_nb_2 = 0.0009765625 * get_distortion_factor(shadow_clip_pos.xy);\n"
+            "        highp float param_nb_3 = dither;\n"
+            "        highp vec3 shadow_nb = shadow_pcf(param_nb_0, param_nb_1, param_nb_2, param_nb_3);\n"
+            "        return mix(shadow_nb, vec3(distant_shadow), vec3(clamp(distance_fade, 0.0, 1.0)));\n"
+            "    }\n";
+
+        SizeT pos = source.find(from);
+        while (pos != String::npos) {
+            source.replace(pos, from.size(), to);
+            pos = source.find(from, pos + to.size());
+        }
+        return source;
+    }
+
     namespace BufferImpl {
         BackendBufferObject::BackendBufferObject() {
 #ifdef TRACY_ENABLE
@@ -1649,6 +1717,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ForceSupporterOutput(source);
                 source = ClampSnormFallbackOutputs(std::move(source), glShaderType,
                                                    m_snormFallbackClampOutputMask);
+                source = PatchPhotonShadowCompareBlockerSearch(std::move(source), glShaderType);
+                source = PatchPhotonShadowNoBlockerFallback(std::move(source), glShaderType);
 
                 // Patch for Photon compiler precision issue
                 String findStr = "1000000.0";
