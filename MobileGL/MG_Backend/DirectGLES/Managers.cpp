@@ -25,6 +25,7 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     constexpr Bool PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC = false;
@@ -82,39 +83,106 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";");
     }
 
-    String PatchPhotonShadowCompareBlockerSearch(String source, GLenum shaderType) {
-        if (shaderType != GL_FRAGMENT_SHADER || source.find("shadowtex0") == String::npos ||
-            source.find("shadowtex1") == String::npos || source.find("blocker_search") == String::npos ||
-            source.find("shadow_pcf") == String::npos) {
+    String PatchPhotonShadowtex0DepthFetches(String source, GLenum shaderType, Bool* patched) {
+        if (shaderType != GL_FRAGMENT_SHADER || source.find("texelFetch(shadowtex0,") == String::npos) {
             return source;
         }
 
-        const String from =
-            "        highp float depth = texelFetch(shadowtex0, ivec2(uv_1 * 2048.0), 0).x;\n"
-            "        highp float weight = step(depth, ref_z);\n";
-        const String to =
-            "        highp float depth_lo = 0.0;\n"
-            "        highp float depth_hi = 1.0;\n"
-            "        for (int depth_search_i = 0; depth_search_i < 12; ++depth_search_i)\n"
-            "        {\n"
-            "            highp float depth_mid = (depth_lo + depth_hi) * 0.5;\n"
-            "            highp float depth_cmp = texture(shadowtex1, vec3(uv_1, depth_mid));\n"
-            "            if (depth_cmp > 0.5)\n"
-            "            {\n"
-            "                depth_lo = depth_mid;\n"
-            "            }\n"
-            "            else\n"
-            "            {\n"
-            "                depth_hi = depth_mid;\n"
-            "            }\n"
-            "        }\n"
-            "        highp float depth = depth_lo;\n"
-            "        highp float weight = step(depth, ref_z);\n";
-
-        SizeT pos = source.find(from);
+        static constexpr const char* fetchPrefix = "texelFetch(shadowtex0,";
+        SizeT pos = source.find(fetchPrefix);
         while (pos != String::npos) {
-            source.replace(pos, from.size(), to);
-            pos = source.find(from, pos + to.size());
+            SizeT coordBegin = pos + std::strlen(fetchPrefix);
+            while (coordBegin < source.size() && std::isspace(static_cast<unsigned char>(source[coordBegin]))) {
+                ++coordBegin;
+            }
+            SizeT cursor = coordBegin;
+            Int parenDepth = 0;
+            SizeT coordEnd = String::npos;
+            while (cursor < source.size()) {
+                const char ch = source[cursor];
+                if (ch == '(') {
+                    ++parenDepth;
+                } else if (ch == ')') {
+                    if (parenDepth == 0) {
+                        break;
+                    }
+                    --parenDepth;
+                } else if (ch == ',' && parenDepth == 0) {
+                    coordEnd = cursor;
+                    break;
+                }
+                ++cursor;
+            }
+            if (coordEnd == String::npos) {
+                pos = source.find(fetchPrefix, pos + std::strlen(fetchPrefix));
+                continue;
+            }
+
+            SizeT levelBegin = coordEnd + 1;
+            while (levelBegin < source.size() && std::isspace(static_cast<unsigned char>(source[levelBegin]))) {
+                ++levelBegin;
+            }
+            if (levelBegin >= source.size() || source[levelBegin] != '0') {
+                pos = source.find(fetchPrefix, pos + std::strlen(fetchPrefix));
+                continue;
+            }
+            SizeT callEnd = levelBegin + 1;
+            while (callEnd < source.size() && std::isspace(static_cast<unsigned char>(source[callEnd]))) {
+                ++callEnd;
+            }
+            if (callEnd + 2 >= source.size() || source[callEnd] != ')' || source[callEnd + 1] != '.' ||
+                source[callEnd + 2] != 'x') {
+                pos = source.find(fetchPrefix, pos + std::strlen(fetchPrefix));
+                continue;
+            }
+
+            const String coord = source.substr(coordBegin, coordEnd - coordBegin);
+            const String replacement = String("MobileGLPhotonShadowtex0Depth(") + coord + ")";
+            source.replace(pos, callEnd + 3 - pos, replacement);
+            if (patched) {
+                *patched = true;
+            }
+            pos = source.find(fetchPrefix, pos + replacement.size());
+        }
+
+        if (patched && *patched) {
+            const String uniformFrom = "uniform highp sampler2D shadowtex0;";
+            const String uniformTo = "uniform highp sampler2DShadow shadowtex0;";
+            pos = source.find(uniformFrom);
+            while (pos != String::npos) {
+                source.replace(pos, uniformFrom.size(), uniformTo);
+                pos = source.find(uniformFrom, pos + uniformTo.size());
+            }
+            // Adreno GLES returns incorrect values for raw depth texelFetch on Photon shadowtex0.
+            // Reconstruct raw depth with compare sampling from the same texture instead of redirecting to shadowtex1.
+            const String helper =
+                "highp float MobileGLPhotonShadowtex0Depth(ivec2 texel)\n"
+                "{\n"
+                "    highp vec2 uv = (vec2(texel) + vec2(0.5)) * 0.00048828125;\n"
+                "    highp float depth_lo = 0.0;\n"
+                "    highp float depth_hi = 1.0;\n"
+                "    for (int depth_search_i = 0; depth_search_i < 12; ++depth_search_i)\n"
+                "    {\n"
+                "        highp float depth_mid = (depth_lo + depth_hi) * 0.5;\n"
+                "        highp float depth_cmp = texture(shadowtex0, vec3(uv, depth_mid));\n"
+                "        if (depth_cmp > 0.5)\n"
+                "        {\n"
+                "            depth_lo = depth_mid;\n"
+                "        }\n"
+                "        else\n"
+                "        {\n"
+                "            depth_hi = depth_mid;\n"
+                "        }\n"
+                "    }\n"
+                "    return depth_lo;\n"
+                "}\n";
+            pos = source.find(uniformTo);
+            if (pos != String::npos) {
+                const SizeT lineEnd = source.find('\n', pos);
+                if (lineEnd != String::npos) {
+                    source.insert(lineEnd + 1, helper);
+                }
+            }
         }
         return source;
     }
@@ -1640,6 +1708,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u",
                     stateProgramObject->GetExternalIndex(), m_backendProgramId);
             m_snormFallbackClampOutputMask = g_snormFallbackClampOutputMask;
+            m_usesPhotonShadowtex0CompareSampler = false;
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -1717,7 +1786,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ForceSupporterOutput(source);
                 source = ClampSnormFallbackOutputs(std::move(source), glShaderType,
                                                    m_snormFallbackClampOutputMask);
-                source = PatchPhotonShadowCompareBlockerSearch(std::move(source), glShaderType);
+                source = PatchPhotonShadowtex0DepthFetches(
+                    std::move(source), glShaderType, &m_usesPhotonShadowtex0CompareSampler);
                 source = PatchPhotonShadowNoBlockerFallback(std::move(source), glShaderType);
 
                 // Patch for Photon compiler precision issue
@@ -1802,6 +1872,49 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace PrgramImpl
 
     namespace SamplerImpl {
+        static GLuint g_photonShadowtex0CompareSampler = 0;
+
+        static GLuint GetPhotonShadowtex0CompareSampler() {
+            if (g_photonShadowtex0CompareSampler != 0) {
+                return g_photonShadowtex0CompareSampler;
+            }
+
+            g_GLESFuncs.glGenSamplers(1, &g_photonShadowtex0CompareSampler);
+            return g_photonShadowtex0CompareSampler;
+        }
+
+        void BindPhotonShadowtex0CompareSampler(
+            Uint unit, const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject) {
+            const GLuint sampler = GetPhotonShadowtex0CompareSampler();
+            if (stateSamplerObject) {
+                const auto& samplerParams = stateSamplerObject->GetAllSamplerParameters();
+                g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER,
+                                                static_cast<GLint>(MG_Util::ConvertSamplerFilterModeToGLEnum(
+                                                    samplerParams.minFilter, samplerParams.mipmapMode)));
+                g_GLESFuncs.glSamplerParameteri(
+                    sampler, GL_TEXTURE_MAG_FILTER,
+                    static_cast<GLint>(MG_Util::ConvertSamplerFilterModeToGLEnum(samplerParams.magFilter,
+                                                                                  SamplerMipmapMode::None)));
+                g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S,
+                                                static_cast<GLint>(MG_Util::ConvertSamplerWrapModeToGLEnum(
+                                                    samplerParams.wrapS)));
+                g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T,
+                                                static_cast<GLint>(MG_Util::ConvertSamplerWrapModeToGLEnum(
+                                                    samplerParams.wrapT)));
+                g_GLESFuncs.glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, samplerParams.minLod);
+                g_GLESFuncs.glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, samplerParams.maxLod);
+            } else {
+                g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            }
+            g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+            g_GLESFuncs.glSamplerParameteri(sampler, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+            g_GLESFuncs.glBindSampler(static_cast<GLenum>(unit), sampler);
+            g_boundSamplersCache[unit] = nullptr;
+        }
+
         BackendSamplerObject::BackendSamplerObject() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -1896,8 +2009,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void UnbindSampler(Uint unit) {
-            if (g_boundSamplersCache[unit] == nullptr) return;
-
             g_GLESFuncs.glBindSampler(static_cast<GLenum>(unit), 0);
             g_boundSamplersCache[unit] = nullptr;
         }

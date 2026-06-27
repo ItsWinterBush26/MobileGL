@@ -285,12 +285,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint GetBackendProgramId() const { return m_backendProgramId; }
             Uint GetBackendGlobalUBOId() const { return m_backendGlobalUBOId; }
             Uint32 GetSnormFallbackClampOutputMask() const { return m_snormFallbackClampOutputMask; }
+            Bool UsesPhotonShadowtex0CompareSampler() const { return m_usesPhotonShadowtex0CompareSampler; }
 
         private:
             Uint m_backendProgramId = 0;
             Uint m_backendGlobalUBOId = 0;
             Int m_baseInstanceUniformLocation = -1;
             Uint32 m_snormFallbackClampOutputMask = 0;
+            Bool m_usesPhotonShadowtex0CompareSampler = false;
             Bool m_isInitialized = false;
         };
 
@@ -315,6 +317,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         };
 
         void UnbindSampler(Uint unit);
+        void BindPhotonShadowtex0CompareSampler(
+            Uint unit, const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject);
 
         extern Array<BackendSamplerObject*, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundSamplersCache;

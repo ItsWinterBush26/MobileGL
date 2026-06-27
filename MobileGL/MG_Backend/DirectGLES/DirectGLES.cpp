@@ -935,6 +935,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         g_GLESFuncs.glUniform1i(locAtBackend, unit);
 
                         auto& samplerObject = MG_State::pGLContext->GetTextureUnitObject(unit).GetSamplerObject();
+                        if (backendProgramIt->second->UsesPhotonShadowtex0CompareSampler() && name == "shadowtex0") {
+                            SamplerImpl::BindPhotonShadowtex0CompareSampler(unit, samplerObject);
+                            continue;
+                        }
 
                         if (samplerObject) {
                             const auto& backendSamplerIt =
