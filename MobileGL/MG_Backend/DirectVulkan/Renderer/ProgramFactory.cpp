@@ -1093,9 +1093,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 for (auto* binding : bindings) {
                     MOBILEGL_ASSERT(binding != nullptr, "ProgramFactory: null descriptor binding reflection record");
                     const auto kind = ReflectDescriptorTypeToBindingKind(binding->descriptor_type);
-                    MOBILEGL_ASSERT(binding->count == 1,
-                                    "ProgramFactory: descriptor arrays are unsupported (name='%s' count=%u)",
-                                    binding->name ? binding->name : "<null>", binding->count);
+                    const Uint32 descriptorCount = std::max<Uint32>(1u, binding->count);
+                    if (descriptorCount > 1) {
+                        MGLOG_W("ProgramFactory: descriptor array detected for '%s' count=%u; using descriptorCount=%u",
+                                binding->name ? binding->name : "<null>", binding->count, descriptorCount);
+                    }
 
                     DescriptorKey key{};
                     key.kind = kind;
@@ -1169,6 +1171,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
     } // namespace
+
+    Uint32 ProgramFactory::ComputeMaxProgramBindings(const VkPhysicalDeviceProperties& properties) {
+        const auto& limits = properties.limits;
+        static constexpr Uint32 kMinProgramBindings = 32;
+        static constexpr Uint32 kMaxProgramBindingsCap = 256;
+
+        const Uint32 maxCombinedImageSamplers =
+            std::min(limits.maxPerStageDescriptorSamplers, limits.maxDescriptorSetSamplers);
+        const Uint32 maxSampledImages =
+            std::min(limits.maxPerStageDescriptorSampledImages, limits.maxDescriptorSetSampledImages);
+        const Uint32 maxUniformBuffers =
+            std::min(limits.maxPerStageDescriptorUniformBuffers, limits.maxDescriptorSetUniformBuffers);
+        const Uint32 maxDynamicUniformBuffers =
+            std::min(limits.maxPerStageDescriptorUniformBuffers, limits.maxDescriptorSetUniformBuffersDynamic);
+        const Uint32 maxStorageBuffers =
+            std::min(limits.maxPerStageDescriptorStorageBuffers, limits.maxDescriptorSetStorageBuffers);
+        const Uint32 maxStorageImages =
+            std::min(limits.maxPerStageDescriptorStorageImages, limits.maxDescriptorSetStorageImages);
+        const Uint32 maxInputAttachments =
+            std::min(limits.maxPerStageDescriptorInputAttachments, limits.maxDescriptorSetInputAttachments);
+
+        Uint32 maxBindings = limits.maxPerStageResources;
+        maxBindings = std::min(maxBindings, maxCombinedImageSamplers + maxSampledImages + maxUniformBuffers +
+                                               maxDynamicUniformBuffers + maxStorageBuffers + maxStorageImages +
+                                               maxInputAttachments);
+        maxBindings = std::max(kMinProgramBindings, maxBindings);
+        maxBindings = std::min(kMaxProgramBindingsCap, maxBindings);
+        return maxBindings;
+    }
 
     VkShaderStageFlagBits ProgramFactory::ToVkStage(ShaderStage stage) {
         switch (stage) {
@@ -1432,6 +1463,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                        const Vector<Vector<Uint>>& spirv, VkProgramObject& entry) const {
         // Initialize layout vectors
         entry.bindingKinds.assign(m_maxBindings, DescriptorBindingKind::None);
+        entry.descriptorCountsByBinding.assign(m_maxBindings, 1);
         entry.uniformBlockIndexByBinding.assign(m_maxBindings, -1);
         entry.samplerNameByBinding.assign(m_maxBindings, String());
         entry.samplerUniformLocationByBinding.assign(m_maxBindings, -1);
@@ -1459,9 +1491,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             auto ubos = session.GetShaderInterface(SPVC_RESOURCE_TYPE_UNIFORM_BUFFER);
             for (const auto& ubo : ubos) {
                 const Uint32 binding = ubo.location; // GetShaderInterface stores binding in location field
-                MOBILEGL_ASSERT(binding < m_maxBindings,
-                                "ProgramFactory::ReflectLayout: UBO binding %u exceeds maxBindings=%u for '%s'",
-                                binding, m_maxBindings, ubo.name.c_str());
+                if (binding >= m_maxBindings) {
+                    MGLOG_E("ProgramFactory::ReflectLayout: UBO binding %u exceeds maxBindings=%u for '%s'; skipping",
+                            binding, m_maxBindings, ubo.name.c_str());
+                    continue;
+                }
 
                 // Check for global UBO
                 if (std::strstr(ubo.name.c_str(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME) != nullptr) {
@@ -1534,9 +1568,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 const Uint32 binding = sampler->binding;
                 const String uniformName = NormalizeDescriptorName(*sampler, descriptorKind);
-                MOBILEGL_ASSERT(binding < m_maxBindings,
-                                "ProgramFactory::ReflectLayout: sampler binding %u exceeds maxBindings=%u for '%s'",
-                                binding, m_maxBindings, uniformName.c_str());
+                if (binding >= m_maxBindings) {
+                    MGLOG_E("ProgramFactory::ReflectLayout: sampler binding %u exceeds maxBindings=%u for '%s'; skipping",
+                            binding, m_maxBindings, uniformName.c_str());
+                    continue;
+                }
+
+                const Uint32 descriptorCount = std::max<Uint32>(1u, sampler->count);
+                entry.descriptorCountsByBinding[binding] =
+                    std::max(entry.descriptorCountsByBinding[binding], descriptorCount);
 
                 MOBILEGL_ASSERT(entry.bindingKinds[binding] == DescriptorBindingKind::None ||
                                     entry.bindingKinds[binding] == descriptorKind,
@@ -1602,7 +1642,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             VkDescriptorSetLayoutBinding layoutBinding{};
             layoutBinding.binding = binding;
-            layoutBinding.descriptorCount = 1;
+            layoutBinding.descriptorCount = std::max<Uint32>(1u, entry.descriptorCountsByBinding[binding]);
             layoutBinding.stageFlags = VK_SHADER_STAGE_ALL;
             layoutBinding.pImmutableSamplers = nullptr;
             if (kind == DescriptorBindingKind::UniformBufferDynamic) {

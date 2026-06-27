@@ -14,6 +14,7 @@
 #include "Init.h"
 #include "MG_Backend/DirectVulkan/DirectVulkanResourceState.h"
 #include "MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h"
+#include "MG_Backend/DirectVulkan/Renderer/ProgramFactory.h"
 #include "MG_Backend/BackendObjects.h"
 #include "MG_Impl/GLImpl/Getter/GL_Getter.h"
 #include "MG_Impl/GLImpl/Program/GL_Program.h"
@@ -32,6 +33,26 @@ protected:
 
 TEST_F(ProgramTest, Sanity) {
     ASSERT_TRUE(true);
+}
+
+TEST_F(ProgramTest, ComputeMaxProgramBindingsUsesDefensiveMinimum) {
+    VkPhysicalDeviceProperties properties{};
+    properties.limits.maxPerStageResources = 16;
+    properties.limits.maxPerStageDescriptorSamplers = 16;
+    properties.limits.maxDescriptorSetSamplers = 16;
+    properties.limits.maxPerStageDescriptorSampledImages = 16;
+    properties.limits.maxDescriptorSetSampledImages = 16;
+    properties.limits.maxPerStageDescriptorUniformBuffers = 8;
+    properties.limits.maxDescriptorSetUniformBuffers = 8;
+    properties.limits.maxDescriptorSetUniformBuffersDynamic = 8;
+    properties.limits.maxPerStageDescriptorStorageBuffers = 4;
+    properties.limits.maxDescriptorSetStorageBuffers = 4;
+    properties.limits.maxPerStageDescriptorStorageImages = 4;
+    properties.limits.maxDescriptorSetStorageImages = 4;
+    properties.limits.maxPerStageDescriptorInputAttachments = 4;
+    properties.limits.maxDescriptorSetInputAttachments = 4;
+
+    EXPECT_GE(MobileGL::MG_Backend::DirectVulkan::ProgramFactory::ComputeMaxProgramBindings(properties), 32u);
 }
 
 const char* vsSrc = R"(#version 460

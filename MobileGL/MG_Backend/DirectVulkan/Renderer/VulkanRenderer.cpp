@@ -1014,26 +1014,6 @@ void main() {
             const char* label = nullptr;
         };
 
-        static Uint32 ComputeMaxProgramBindings(const VkPhysicalDeviceProperties& properties) {
-            const auto& limits = properties.limits;
-            static constexpr Uint32 kMinProgramBindings = 16;
-            static constexpr Uint32 kMaxProgramBindingsCap = 256;
-            const Uint32 maxCombinedImageSamplers =
-                std::min(limits.maxPerStageDescriptorSamplers, limits.maxDescriptorSetSamplers);
-            const Uint32 maxSampledImages =
-                std::min(limits.maxPerStageDescriptorSampledImages, limits.maxDescriptorSetSampledImages);
-            const Uint32 maxDynamicUniformBuffers =
-                std::min(limits.maxPerStageDescriptorUniformBuffers, limits.maxDescriptorSetUniformBuffersDynamic);
-
-            Uint32 maxBindings = limits.maxPerStageResources;
-            maxBindings = std::min(maxBindings, maxCombinedImageSamplers);
-            maxBindings = std::min(maxBindings, maxSampledImages + maxDynamicUniformBuffers);
-
-            maxBindings = std::max(kMinProgramBindings, maxBindings);
-            maxBindings = std::min(kMaxProgramBindingsCap, maxBindings);
-            return maxBindings;
-        }
-
         static void GetImageTransitionSourceState(VkImageLayout oldLayout, VkPipelineStageFlags& outSrcStageMask,
                                                   VkAccessFlags& outSrcAccessMask) {
             switch (oldLayout) {
@@ -1760,7 +1740,7 @@ void main() {
         succeeded = m_renderPassManager->Initialize();
         MOBILEGL_ASSERT(succeeded, "VkRenderPassManager initialization failed.");
 
-        const Uint32 maxProgramBindings = ComputeMaxProgramBindings(m_physicalDevice.properties);
+        const Uint32 maxProgramBindings = ProgramFactory::ComputeMaxProgramBindings(m_physicalDevice.properties);
         MGLOG_I("DirectVulkan: using %u program descriptor bindings", maxProgramBindings);
 
         RecreateSwapchain();

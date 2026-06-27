@@ -49,6 +49,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
             VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
             Vector<DescriptorBindingKind> bindingKinds;
+            Vector<Uint32> descriptorCountsByBinding;
             Vector<Uint32> dynamicBindings;
             Vector<Int> uniformBlockIndexByBinding;
             Vector<String> samplerNameByBinding;
@@ -77,6 +78,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 descriptorSetLayout = other.descriptorSetLayout;
                 pipelineLayout = other.pipelineLayout;
                 bindingKinds = std::move(other.bindingKinds);
+                descriptorCountsByBinding = std::move(other.descriptorCountsByBinding);
                 dynamicBindings = std::move(other.dynamicBindings);
                 uniformBlockIndexByBinding = std::move(other.uniformBlockIndexByBinding);
                 samplerNameByBinding = std::move(other.samplerNameByBinding);
@@ -113,6 +115,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 descriptorSetLayout = other.descriptorSetLayout;
                 pipelineLayout = other.pipelineLayout;
                 bindingKinds = std::move(other.bindingKinds);
+                descriptorCountsByBinding = std::move(other.descriptorCountsByBinding);
                 dynamicBindings = std::move(other.dynamicBindings);
                 uniformBlockIndexByBinding = std::move(other.uniformBlockIndexByBinding);
                 samplerNameByBinding = std::move(other.samplerNameByBinding);
@@ -177,6 +180,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkProgramObject& GetOrCreateProgram(
             const MG_State::GLState::ProgramObject& program, CompileOptionFlags flags);
 
+        static Uint32 ComputeMaxProgramBindings(const VkPhysicalDeviceProperties& properties);
         static VkShaderStageFlagBits ToVkStage(ShaderStage stage);
 
     private:
